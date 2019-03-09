@@ -15,10 +15,9 @@ import com.xxl.rpc.remoting.invoker.call.CallType;
 import com.xxl.rpc.remoting.invoker.reference.XxlRpcReferenceBean;
 import com.xxl.rpc.remoting.invoker.route.LoadBalance;
 import com.xxl.rpc.remoting.net.NetEnum;
-import com.xxl.rpc.remoting.net.impl.jetty.server.JettyServerHandler;
+import com.xxl.rpc.remoting.net.impl.servlet.server.ServletServerHandler;
 import com.xxl.rpc.remoting.provider.XxlRpcProviderFactory;
 import com.xxl.rpc.serialize.Serializer;
-import org.eclipse.jetty.server.Request;
 import org.quartz.*;
 import org.quartz.Trigger.TriggerState;
 import org.quartz.impl.triggers.CronTriggerImpl;
@@ -95,12 +94,12 @@ public final class XxlJobDynamicScheduler {
 
 
     // ---------------------- admin rpc provider (no server version) ----------------------
-    private static JettyServerHandler jettyServerHandler;
+    private static ServletServerHandler servletServerHandler;
     private void initRpcProvider(){
         // init
         XxlRpcProviderFactory xxlRpcProviderFactory = new XxlRpcProviderFactory();
         xxlRpcProviderFactory.initConfig(
-                NetEnum.JETTY,
+                NetEnum.NETTY_HTTP,
                 Serializer.SerializeEnum.HESSIAN.getSerializer(),
                 null,
                 0,
@@ -111,14 +110,14 @@ public final class XxlJobDynamicScheduler {
         // add services
         xxlRpcProviderFactory.addService(AdminBiz.class.getName(), null, XxlJobAdminConfig.getAdminConfig().getAdminBiz());
 
-        // jetty handler
-        jettyServerHandler = new JettyServerHandler(xxlRpcProviderFactory);
+        // servlet handler
+        servletServerHandler = new ServletServerHandler(xxlRpcProviderFactory);
     }
     private void stopRpcProvider() throws Exception {
         XxlRpcInvokerFactory.getInstance().stop();
     }
     public static void invokeAdminService(HttpServletRequest request, HttpServletResponse response) throws IOException, ServletException {
-        jettyServerHandler.handle(null, new Request(null, null), request, response);
+        servletServerHandler.handle(null, request, response);
     }
 
 
@@ -139,13 +138,13 @@ public final class XxlJobDynamicScheduler {
 
         // set-cache
         executorBiz = (ExecutorBiz) new XxlRpcReferenceBean(
-                NetEnum.JETTY,
+                NetEnum.NETTY_HTTP,
                 Serializer.SerializeEnum.HESSIAN.getSerializer(),
                 CallType.SYNC,
                 LoadBalance.ROUND,
                 ExecutorBiz.class,
                 null,
-                10000,
+                5000,
                 address,
                 XxlJobAdminConfig.getAdminConfig().getAccessToken(),
                 null,
@@ -165,11 +164,10 @@ public final class XxlJobDynamicScheduler {
      */
 	public static void fillJobInfo(XxlJobInfo jobInfo) {
 
-        String group = String.valueOf(jobInfo.getJobGroup());
         String name = String.valueOf(jobInfo.getId());
 
         // trigger key
-        TriggerKey triggerKey = TriggerKey.triggerKey(name, group);
+        TriggerKey triggerKey = TriggerKey.triggerKey(name);
         try {
 
             // trigger cron
@@ -199,15 +197,14 @@ public final class XxlJobDynamicScheduler {
      * add trigger + job
      *
      * @param jobName
-     * @param jobGroup
      * @param cronExpression
      * @return
      * @throws SchedulerException
      */
-	public static boolean addJob(String jobName, String jobGroup, String cronExpression) throws SchedulerException {
+	public static boolean addJob(String jobName, String cronExpression) throws SchedulerException {
     	// 1、job key
-        TriggerKey triggerKey = TriggerKey.triggerKey(jobName, jobGroup);
-        JobKey jobKey = new JobKey(jobName, jobGroup);
+        TriggerKey triggerKey = TriggerKey.triggerKey(jobName);
+        JobKey jobKey = new JobKey(jobName);
 
         // 2、valid
         if (scheduler.checkExists(triggerKey)) {
@@ -231,7 +228,7 @@ public final class XxlJobDynamicScheduler {
         // 5、schedule job
         Date date = scheduler.scheduleJob(jobDetail, cronTrigger);
 
-        logger.info(">>>>>>>>>>> addJob success, jobDetail:{}, cronTrigger:{}, date:{}", jobDetail, cronTrigger, date);
+        logger.info(">>>>>>>>>>> addJob success(quartz), jobDetail:{}, cronTrigger:{}, date:{}", jobDetail, cronTrigger, date);
         return true;
     }
 
@@ -240,19 +237,20 @@ public final class XxlJobDynamicScheduler {
      * remove trigger + job
      *
      * @param jobName
-     * @param jobGroup
      * @return
      * @throws SchedulerException
      */
-    public static boolean removeJob(String jobName, String jobGroup) throws SchedulerException {
+    public static boolean removeJob(String jobName) throws SchedulerException {
 
-        TriggerKey triggerKey = TriggerKey.triggerKey(jobName, jobGroup);
+        JobKey jobKey = new JobKey(jobName);
+        scheduler.deleteJob(jobKey);
 
+        /*TriggerKey triggerKey = TriggerKey.triggerKey(jobName);
         if (scheduler.checkExists(triggerKey)) {
             scheduler.unscheduleJob(triggerKey);    // trigger + job
-        }
+        }*/
 
-        logger.info(">>>>>>>>>>> removeJob success, triggerKey:{}", triggerKey);
+        logger.info(">>>>>>>>>>> removeJob success(quartz), jobKey:{}", jobKey);
         return true;
     }
 
@@ -260,16 +258,15 @@ public final class XxlJobDynamicScheduler {
     /**
      * updateJobCron
      *
-     * @param jobGroup
      * @param jobName
      * @param cronExpression
      * @return
      * @throws SchedulerException
      */
-	public static boolean updateJobCron(String jobGroup, String jobName, String cronExpression) throws SchedulerException {
+	public static boolean updateJobCron(String jobName, String cronExpression) throws SchedulerException {
 
         // 1、job key
-        TriggerKey triggerKey = TriggerKey.triggerKey(jobName, jobGroup);
+        TriggerKey triggerKey = TriggerKey.triggerKey(jobName);
 
         // 2、valid
         if (!scheduler.checkExists(triggerKey)) {
@@ -292,7 +289,7 @@ public final class XxlJobDynamicScheduler {
         scheduler.rescheduleJob(triggerKey, oldTrigger);
 
         /*
-        JobKey jobKey = new JobKey(jobName, jobGroup);
+        JobKey jobKey = new JobKey(jobName);
 
         // old job detail
         JobDetail jobDetail = scheduler.getJobDetail(jobKey);
@@ -303,7 +300,7 @@ public final class XxlJobDynamicScheduler {
         // cover trigger of job detail
         scheduler.scheduleJob(jobDetail, triggerSet, true);*/
 
-        logger.info(">>>>>>>>>>> resumeJob success, JobGroup:{}, JobName:{}", jobGroup, jobName);
+        logger.info(">>>>>>>>>>> resumeJob success, JobName:{}", jobName);
         return true;
     }
 
@@ -312,13 +309,12 @@ public final class XxlJobDynamicScheduler {
      * pause
      *
      * @param jobName
-     * @param jobGroup
      * @return
      * @throws SchedulerException
      */
-    /*public static boolean pauseJob(String jobName, String jobGroup) throws SchedulerException {
+    /*public static boolean pauseJob(String jobName) throws SchedulerException {
 
-    	TriggerKey triggerKey = TriggerKey.triggerKey(jobName, jobGroup);
+    	TriggerKey triggerKey = TriggerKey.triggerKey(jobName);
 
         boolean result = false;
         if (scheduler.checkExists(triggerKey)) {
@@ -335,13 +331,12 @@ public final class XxlJobDynamicScheduler {
      * resume
      *
      * @param jobName
-     * @param jobGroup
      * @return
      * @throws SchedulerException
      */
-    /*public static boolean resumeJob(String jobName, String jobGroup) throws SchedulerException {
+    /*public static boolean resumeJob(String jobName) throws SchedulerException {
 
-        TriggerKey triggerKey = TriggerKey.triggerKey(jobName, jobGroup);
+        TriggerKey triggerKey = TriggerKey.triggerKey(jobName);
         
         boolean result = false;
         if (scheduler.checkExists(triggerKey)) {
@@ -358,14 +353,13 @@ public final class XxlJobDynamicScheduler {
      * run
      *
      * @param jobName
-     * @param jobGroup
      * @return
      * @throws SchedulerException
      */
-    /*public static boolean triggerJob(String jobName, String jobGroup) throws SchedulerException {
+    /*public static boolean triggerJob(String jobName) throws SchedulerException {
     	// TriggerKey : name + group
-    	JobKey jobKey = new JobKey(jobName, jobGroup);
-        TriggerKey triggerKey = TriggerKey.triggerKey(jobName, jobGroup);
+    	JobKey jobKey = new JobKey(jobName);
+        TriggerKey triggerKey = TriggerKey.triggerKey(jobName);
 
         boolean result = false;
         if (scheduler.checkExists(triggerKey)) {

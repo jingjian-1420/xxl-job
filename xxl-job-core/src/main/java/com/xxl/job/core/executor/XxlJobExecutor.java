@@ -69,7 +69,7 @@ public class XxlJobExecutor  {
         // init logpath
         XxlJobFileAppender.initLogPath(logPath);
 
-        // init admin-client
+        // init invoker, admin-client
         initAdminBizList(adminAddresses, accessToken);
 
 
@@ -92,6 +92,7 @@ public class XxlJobExecutor  {
             }
             jobThreadRepository.clear();
         }
+        jobHandlerRepository.clear();
 
 
         // destory JobLogFileCleanThread
@@ -102,12 +103,17 @@ public class XxlJobExecutor  {
 
         // destory executor-server
         stopRpcProvider();
+
+        // destory invoker
+        stopInvokerFactory();
     }
 
 
     // ---------------------- admin-client (rpc invoker) ----------------------
     private static List<AdminBiz> adminBizList;
+    private static Serializer serializer;
     private void initAdminBizList(String adminAddresses, String accessToken) throws Exception {
+        serializer = Serializer.SerializeEnum.HESSIAN.getSerializer();
         if (adminAddresses!=null && adminAddresses.trim().length()>0) {
             for (String address: adminAddresses.trim().split(",")) {
                 if (address!=null && address.trim().length()>0) {
@@ -115,8 +121,8 @@ public class XxlJobExecutor  {
                     String addressUrl = address.concat(AdminBiz.MAPPING);
 
                     AdminBiz adminBiz = (AdminBiz) new XxlRpcReferenceBean(
-                            NetEnum.JETTY,
-                            Serializer.SerializeEnum.HESSIAN.getSerializer(),
+                            NetEnum.NETTY_HTTP,
+                            serializer,
                             CallType.SYNC,
                             LoadBalance.ROUND,
                             AdminBiz.class,
@@ -136,8 +142,19 @@ public class XxlJobExecutor  {
             }
         }
     }
+    private void stopInvokerFactory(){
+        // stop invoker factory
+        try {
+            XxlRpcInvokerFactory.getInstance().stop();
+        } catch (Exception e) {
+            logger.error(e.getMessage(), e);
+        }
+    }
     public static List<AdminBiz> getAdminBizList(){
         return adminBizList;
+    }
+    public static Serializer getSerializer() {
+        return serializer;
     }
 
 
@@ -153,7 +170,7 @@ public class XxlJobExecutor  {
         serviceRegistryParam.put("address", address);
 
         xxlRpcProviderFactory = new XxlRpcProviderFactory();
-        xxlRpcProviderFactory.initConfig(NetEnum.JETTY, Serializer.SerializeEnum.HESSIAN.getSerializer(), ip, port, accessToken, ExecutorServiceRegistry.class, serviceRegistryParam);
+        xxlRpcProviderFactory.initConfig(NetEnum.NETTY_HTTP, Serializer.SerializeEnum.HESSIAN.getSerializer(), ip, port, accessToken, ExecutorServiceRegistry.class, serviceRegistryParam);
 
         // add services
         xxlRpcProviderFactory.addService(ExecutorBiz.class.getName(), null, new ExecutorBizImpl());
@@ -196,12 +213,6 @@ public class XxlJobExecutor  {
     }
 
     private void stopRpcProvider() {
-        // stop invoker factory
-        try {
-            XxlRpcInvokerFactory.getInstance().stop();
-        } catch (Exception e) {
-            logger.error(e.getMessage(), e);
-        }
         // stop provider factory
         try {
             xxlRpcProviderFactory.stop();
